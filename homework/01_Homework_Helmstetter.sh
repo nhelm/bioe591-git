@@ -15,3 +15,5 @@ ls -1 fasta/ | wc -l
 ls -1 metadata/ | wc -l
 
 ls week_1 # check to see what's in this folder now
+
+echo "DONE!"
