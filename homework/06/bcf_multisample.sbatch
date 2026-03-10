@@ -25,5 +25,6 @@ conda activate bcftools
 # run mpileup pipeline to call for ALL samples creating a multi_sample.vcf
 bcftools mpileup \
 -f /home/g27n141/bioe-591-genomics/students/Helmstetter/hw_output/05/index/hemoglobin_references.fasta \
+-a FORMAT/DP,FORMAT/AD \
 /home/g27n141/bioe-591-genomics/students/Helmstetter/hw_output/05/sort_hw/*_sorted.bam \
 | bcftools call -mv -Ov -o /home/g27n141/bioe-591-genomics/students/Helmstetter/hw_output/06/hw_06/multi_sample.vcf
