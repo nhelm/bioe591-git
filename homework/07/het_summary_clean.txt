@@ -1,0 +1,9 @@
+INDV	O(HOM)	E(HOM)	N_SITES	F
+Diglossa_mystacalis_163116	47	41.7	65	0.22747
+Diglossa_mystacalis_163980	40	41.7	65	-0.07296
+Diglossa_mystacalis_167557	40	41.7	65	-0.07296
+Diglossa_mystacalis_167858	40	41.7	65	-0.07296
+Diglossa_mystacalis_171226	42	41.7	65	0.01288
+Diglossa_mystacalis_171311	39	41.7	65	-0.11588
+Diglossa_mystacalis_220326	37	41.7	65	-0.20172
+Diglossa_mystacalis_220327	45	41.7	65	0.14163
