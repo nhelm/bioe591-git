@@ -1,0 +1,142 @@
+SAMPLES, = glob_wildcards("data/Diglossa_mystacalis/{sample}_R1_001.fastq.gz")
+
+rule all:
+    input:
+        expand("results/clean/{sample}_R1_001.clean.fastq.gz", sample=SAMPLES),
+        expand("results/clean/{sample}_R2_001.clean.fastq.gz", sample=SAMPLES),
+        "data/reference/hemoglobin_references.fasta.fai",
+        "data/reference/hemoglobin_references.fasta.bwt",
+        expand("results/align/{sample}.sam", sample=SAMPLES),
+        expand("results/sort/{sample}.sorted.bam", sample=SAMPLES),
+        expand("results/sort/{sample}.sorted.bam.bai", sample=SAMPLES),
+        "results/variant/multi_sample.vcf",
+        "results/variant/multi_sample_stats.txt",
+        "results/variant/multi_sample.vcf.gz",
+        "results/filter/vcf_filtered.recode.vcf"
+
+rule fastp:
+    conda:
+        "envs/fastp.yaml"
+    input:
+        r1="data/Diglossa_mystacalis/{sample}_R1_001.fastq.gz",
+        r2="data/Diglossa_mystacalis/{sample}_R2_001.fastq.gz"
+    output:
+        r1="results/clean/{sample}_R1_001.clean.fastq.gz",
+        r2="results/clean/{sample}_R2_001.clean.fastq.gz"
+    shell:
+        """
+        fastp \
+        -i {input.r1} -I {input.r2} \
+        -o {output.r1} -O {output.r2}
+        """
+
+rule index:
+    input:
+        "data/reference/hemoglobin_references.fasta"
+    output:
+        "data/reference/hemoglobin_references.fasta.fai",  # File from samtools faidx, for Rule All Tracking
+        "data/reference/hemoglobin_references.fasta.bwt",  # One file from bwa index for Rule All Tracking; others are created but not tracked
+    conda:
+        "envs/align.yaml"
+    shell:
+        """
+        bwa index {input}
+        samtools faidx {input}
+        """
+
+rule align:
+    input:
+        ref="data/reference/hemoglobin_references.fasta",
+        fai="data/reference/hemoglobin_references.fasta.fai", # Put this here so it continues to track progress and go back a step if this file isn't here, that is it needs this file to continue
+        bwt="data/reference/hemoglobin_references.fasta.bwt", # Put this here so it continues to track progress and go back a step if this file isn't here, that is it needs this file to continue
+        r1="results/clean/{sample}_R1_001.clean.fastq.gz",
+        r2="results/clean/{sample}_R2_001.clean.fastq.gz",
+    output:
+        "results/align/{sample}.sam"
+    conda:
+        "envs/align.yaml"
+    threads: 4
+    resources:
+        runtime=120 # In my Original sbatch it gave the job 30 minutes, default seems to be 2 minutes
+    shell:
+        """
+        bwa mem -t {threads} {input.ref} {input.r1} {input.r2} > {output}
+        """
+
+rule sort:
+    input:
+        "results/align/{sample}.sam"
+    output:
+        bam="results/sort/{sample}.sorted.bam",
+        bai="results/sort/{sample}.sorted.bam.bai"
+    conda:
+        "envs/align.yaml"
+    resources:
+        runtime=120 # This timed out as well. Weird.
+    shell:
+        """
+        samtools view -b {input} | samtools sort -o {output.bam}
+        samtools index {output.bam}
+        """
+
+rule variant:
+    input:
+        ref="data/reference/hemoglobin_references.fasta",
+        bam=expand("results/sort/{sample}.sorted.bam", sample=SAMPLES),
+        bai=expand("results/sort/{sample}.sorted.bam.bai", sample=SAMPLES)
+    output:
+        "results/variant/multi_sample.vcf"
+    conda:
+        "envs/bcftools.yaml"
+    resources:
+        runtime=120
+    shell:
+        """
+        bcftools mpileup -f {input.ref} {input.bam} | bcftools call -mv -Ov -o {output}
+        """
+
+rule variant_stats:
+    input:
+        "results/variant/multi_sample.vcf"
+    output:
+        "results/variant/multi_sample_stats.txt"
+    conda:
+        "envs/bcftools.yaml"
+    shell:
+        """
+        bcftools stats {input} > {output}
+        """
+
+rule gzip_vcf:
+    input:
+        "results/variant/multi_sample.vcf"
+    output:
+        "results/variant/multi_sample.vcf.gz"
+    shell:
+        """
+        gzip -c {input} > {output}
+        """
+
+rule filter:
+    input:
+        "results/variant/multi_sample.vcf.gz"
+    output:
+        "results/filter/vcf_filtered.recode.vcf"
+    conda:
+        "envs/vcftools.yaml"
+    resources:
+        runtime=120
+    shell:
+        """
+        vcftools \
+        --gzvcf {input} \
+        --remove-indv Diglossa_mystacalis_163119 \
+        --remove-indels \
+        --minQ 40 \
+        --mac 2 \
+        --max-missing-count 1 \
+        --min-meanDP 5 \
+        --thin 50 \
+        --recode \
+        --out results/filter/vcf_filtered
+        """
