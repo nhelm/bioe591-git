@@ -1,0 +1,117 @@
+---
+title: "Homework 09: Kinship and Relatedness"
+author: "Nolan Helmstetter"
+format: html
+editor: visual
+---
+
+Homework Assignment: Homework Assignment: comparing ngsRelate estimators of relatedness and kinship to those from `related::coancestry()`
+
+
+Load R Environment and ngsRelate file.
+
+```{r}
+load("/home/g27n141/bioe-591-genomics/students/Helmstetter/hw_output/09/r_env.RData")
+ngs<-read.table("/home/g27n141//bioe-591-genomics/students/Helmstetter/hw_output/09/example/Koala_MaxMissing10.recode.ngsrelate.out", header = TRUE)
+```
+
+
+Create matching IDs between data sets.
+
+```{r}
+relate <- kin_results$relatedness
+
+# Get unique IDs for each pairwise comparison, ensuring you don't have duplicates (i.e., 1 & 2 and 2 & 1)
+relate$pair <- paste(pmin(relate$ind1.id, relate$ind2.id),
+                  pmax(relate$ind1.id, relate$ind2.id),
+                  sep = "_")
+
+ngs$pair <- paste(pmin(ngs$ida, ngs$idb),
+                  pmax(ngs$ida, ngs$idb),
+                  sep = "_")
+
+# Merge df by pairwise comparison
+merged <- merge(relate, ngs, by = "pair")
+
+# Check for duplicates
+any(duplicated(merged$pair))
+```
+
+Plot Several Pairwise Results Comparing relate to ngsRelate estimators. Here I will compare wang vs rab, quellergt vs rab, and dyadml vs theta using plots and Pearson's correlation coefficient.
+
+```{r}
+#| message: false
+#| warning: false
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+```
+
+Calculate Pearson's correlation coefficient
+
+```{r}
+wang_rab<-cor(merged$wang, merged$rab, use = "complete.obs")
+quell_rab<-cor(merged$quellergt, merged$rab, use = "complete.obs")
+dyad_theta<-cor(merged$dyadml, merged$theta, use = "complete.obs")
+
+```
+
+Plot: Wang vs. rab
+
+```{r}
+ggplot() +
+  geom_point(data = merged, aes(x = wang, y = rab), color = "black", alpha = 0.6) +
+  annotate("text",
+           x = min(merged$wang, na.rm = TRUE),
+           y = max(merged$rab, na.rm = TRUE),
+           hjust = 0,
+           label = paste0("Pearson's Correlation Coefficient = ", round(wang_rab, 3))) +
+  labs(x = "Wang", y = "rab") +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    axis.line = element_line(color = "black")
+  )
+
+```
+
+Plot: quellergt vs. rab
+
+```{r}
+ggplot(merged, aes(x = quellergt, y = rab)) +
+  geom_point(alpha = 0.6) +
+  annotate("text",
+           x = min(merged$quellergt, na.rm = TRUE),
+           y = max(merged$rab, na.rm = TRUE),
+           hjust = 0,
+           label = paste0("Pearson's Correlation Coefficient = ", round(quell_rab, 3))) +
+  labs(x = "quellergt", y = "rab") +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    axis.line = element_line(color = "black")
+  )
+
+```
+
+Plot: dyadml vs. theta
+
+```{r}
+ggplot(merged, aes(x = dyadml, y = theta)) +
+  geom_point(alpha = 0.6) +
+  annotate("text",
+           x = min(merged$dyadml, na.rm = TRUE),
+           y = max(merged$theta, na.rm = TRUE),
+           hjust = 0,
+           label = paste0("Pearson's Correlation Coefficient = ", round(dyad_theta, 3))) +
+  labs(x = "DyadML", y = "Theta") +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    axis.line = element_line(color = "black")
+  )
+```
+
