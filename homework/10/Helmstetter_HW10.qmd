@@ -1,0 +1,197 @@
+---
+title: "Homework 10 Example - Admixture, PCA, and DAPC"
+author: "Nolan Helmstetter"
+format:
+  html:
+    self-contained: true
+editor: visual
+---
+
+## Comparing ADMIXTURE and DAPC estimates of ancestry in northern and southern Idaho ground squirrels.
+
+```{r}
+#| include: false
+library(tidyverse)
+library(dplyr)
+library(sf)
+library(ggplot2)
+library(scatterpie)
+library(adegenet)
+library(vcfR)
+```
+
+Extract cross validation error estimates for K = 2–5 from ADMIXTURE runs completed in the bash shell on Tempest using the ADMIXTURE tool.
+
+```{r}
+
+# Extract each CV estimate from each K value (2-5) and put into a single DF.
+
+cv_df <- tibble(
+  file = c(
+    "/home/g27n141/bioe-591-genomics/students/Helmstetter/hw_output/10/output_hw/log2.out",
+    "/home/g27n141/bioe-591-genomics/students/Helmstetter/hw_output/10/output_hw/log3.out",
+    "/home/g27n141/bioe-591-genomics/students/Helmstetter/hw_output/10/output_hw/log4.out",
+    "/home/g27n141/bioe-591-genomics/students/Helmstetter/hw_output/10/output_hw/log5.out"
+  )
+) %>%
+  mutate(
+    text = map_chr(file, read_file),
+    cv_line = str_extract(text, "CV error \\(K=\\d+\\):\\s*[-0-9.eE]+"),
+    K  = str_match(cv_line, "K=(\\d+)")[,2] |> as.integer(),
+    CV = str_match(cv_line, ":\\s*([-0-9.eE]+)")[,2] |> as.numeric()
+  ) %>%
+  select(K, CV) %>%
+  arrange(K)
+
+```
+
+**Run Discriminate Analysis of Principal Components**
+
+DAPC takes these hard-coded assignments and determines which principal components contribute to them, as well as any uncertainty in ancestry. (It is thus designed to discriminate on the basis of user-input populations, and should be used in combination with means clustering or other approaches for detecting and / or designating structure.)
+
+```{r}
+# Load VCF file
+vcf <- read.vcfR(
+  file = "/home/g27n141/bioe-591-genomics/students/Helmstetter/hw_output/10/data/IDGS.recode.vcf",
+  verbose = TRUE)
+
+# Converts genotpyes in VCF and makes a DNbin object. A, C, G, T for each individual.
+dna <- vcfR2DNAbin(vcf, unphased_as_NA = F, consensus = T, extract.haps = F)
+species_genind <- DNAbin2genind(dna)
+
+# Run DAPC across multiple values of K
+grp_auto <- find.clusters(
+  species_genind,
+  n.pca = 50,
+  choose.n.clust = FALSE, 
+  max.n.clust = 10,
+  stat = "BIC"
+)
+
+```
+
+Plot ADMIXTURE Cross validation error next to DACP BIC values
+
+```{r}
+par(mfrow = c(1,2))
+
+# ADMIXTURE plot
+plot(
+  cv_df$K,
+  cv_df$CV,
+  type = "b",
+  xlab = "K",
+  ylab = "CV error",
+  main = "ADMIXTURE (CV)",
+  xaxt = "n"
+)
+axis(1, at = c(2,3,4,5))
+
+# DACP plot
+plot(
+  1:length(grp_auto$Kstat),
+  grp_auto$Kstat,
+  type = "b",
+  xlab = "K",
+  ylab = "BIC",
+  main = "DAPC (BIC)"
+)
+
+
+```
+
+**Comparing Ancestry Assignments between ADMIXTURE and DAPC for K = 2**
+
+Prepare ADMIXTURE files
+
+```{r}
+
+# read sample names and extract
+fam <- read_table("/home/g27n141/bioe-591-genomics/students/Helmstetter/hw_output/10/output/IDGS.int.fam", 
+                  col_names = FALSE,
+                  show_col_types = FALSE
+)
+
+# Extract individual IDs
+samples <- fam$X2   # individual IDs are usually column 2
+
+# K value
+K<-2
+
+# Read Q matrix: Ancestry proportions for each Individual and name columns
+q <- read_table("/home/g27n141/bioe-591-genomics/students/Helmstetter/hw_output/10/output_hw/IDGS.int.2.Q",
+                col_names = FALSE,
+                show_col_types = FALSE
+)
+colnames(q) <- paste0("Cluster", 1:K)
+
+# Combine with sample names
+q_df <- q %>%
+  mutate(sample = samples) %>%
+  relocate(sample)
+
+# Convert for ggplot
+q_long <- q_df %>%
+  pivot_longer(
+    cols = starts_with("Cluster"),
+    names_to = "cluster",
+    values_to = "ancestry"
+  ) %>%
+  mutate(sample = factor(sample, levels = samples))
+
+
+```
+
+Prepare DAPC Files
+
+```{r}
+# Run DAPC using K = 2
+grp <- find.clusters(species_genind, n.pca = 50, n.clust = 2)
+dapc1 <- dapc(species_genind, pop = grp$grp, n.pca = 50, n.da = 2)
+
+# Get posterior probabilities of ancestry assignments
+q_dapc <- as.data.frame(dapc1$posterior)
+  q_dapc$sample <- rownames(q_dapc)
+  q_long_dapc <- q_dapc |>
+    pivot_longer(
+      cols = -sample,
+      names_to = "cluster",
+      values_to = "ancestry"
+    )
+
+```
+
+Plot.
+```{r}
+
+library(patchwork)
+
+p1 <- ggplot(q_long, aes(x = sample, y = ancestry, fill = cluster)) +
+  geom_col(width = 1, color = "white") +
+  scale_fill_manual(values = c("Cluster1" = "blue", "Cluster2" = "red")) +
+  theme_bw() +
+  labs(x = "Individual", y = "ADMIXTURE Ancestry proportion") +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    legend.position = "none"
+  )
+
+p2 <- ggplot(q_long_dapc, aes(x = sample, y = ancestry, fill = cluster)) +
+  geom_col(width = 1, color = "white") +
+  scale_fill_manual(values = c("1" = "red", "2" = "blue")) +
+  theme_bw() +
+  labs(x = "Individual", y = "DAPC Ancestry proportion") +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+  )
+
+p1 + p2
+```
+
+### Results
+
+The results highlight that K = 2 is supported by both ADMIXTURE and DAPC. Specifically K = 2 had the lowest cross-validation error (ADMIXTURE) and the lowest BIC (DAPC; Fig. 1). Additionally, ancestry estimates from ADMIXTURE and DAPC were similar, with both methods separating individuals into two distinct groups (Fig. 2). These results are consistent with those reported in Barbosa et al. (2020), which identified two distinct groups corresponding to northern and southern Idaho ground squirrels.

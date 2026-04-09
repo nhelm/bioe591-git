@@ -1,0 +1,309 @@
+---
+title: "Homework 10 Example - Admixture, PCA, and DAPC"
+author: "Nolan Helmstetter"
+format:
+  html:
+    self-contained: true
+editor: visual
+---
+
+# Viewing admixture results completed via the bash shell on tempest, using the tool admixture
+
+```{r}
+#| include: false
+library(tidyverse)
+library(dplyr)
+library(sf)
+library(ggplot2)
+library(scatterpie)
+library(adegenet)
+library(vcfR)
+```
+
+Load admixture output
+
+```{r}
+
+# read sample names and extract
+fam <- read_table("/home/g27n141/bioe-591-genomics/students/Helmstetter/hw_output/10/output/IDGS.int.fam", 
+                  col_names = FALSE,
+                  show_col_types = FALSE
+)
+
+```
+
+Extract Individual IDs
+
+```{r}
+samples <- fam$X2   # individual IDs are usually column 2
+```
+
+Choose your K value (will be 2 for this demo)
+
+```{r}
+K <- 2
+```
+
+Read Q matrix: Ancestry proprtions for each individual
+
+```{r}
+q <- read_table("/home/g27n141/bioe-591-genomics/students/Helmstetter/hw_output/10/output/IDGS.int.2.Q",
+                col_names = FALSE,
+                show_col_types = FALSE
+)
+
+head(q)
+```
+
+Name the ancestry columns
+
+```{r}
+colnames(q) <- paste0("Cluster", 1:K)
+```
+
+Combine with sample names
+
+```{r}
+q_df <- q %>%
+  mutate(sample = samples) %>%
+  relocate(sample)
+head(q_df)
+```
+
+Convert to long format for ggplot
+
+```{r}
+q_long <- q_df %>%
+  pivot_longer(
+    cols = starts_with("Cluster"),
+    names_to = "cluster",
+    values_to = "ancestry"
+  ) %>%
+  mutate(sample = factor(sample, levels = samples))
+head(q_long)
+```
+
+```{r}
+# plot
+ggplot(q_long, aes(x = sample, y = ancestry, fill = cluster)) +
+  geom_col(width = 1, color="white") +
+  theme_bw() +
+  labs(x = "Individual", y = "Ancestry proportion") +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)
+  )
+```
+
+Use regex functions in R to extract our cross-validation values. CV values are hidden in the .out files.
+
+```{r}
+cv_df <- tibble(file = "/home/g27n141/bioe-591-genomics/students/Helmstetter/hw_output/10/log/admix_step2-3840151.out") %>%
+  mutate(
+    text = map_chr(file, read_file),
+    cv_line = str_extract(text, "CV error \\(K=\\d+\\):\\s*[-0-9.eE]+"),
+    K  = str_match(cv_line, "CV error \\(K=(\\d+)\\)")[,2] |> as.integer(),
+    CV = str_match(cv_line, ":\\s*([-0-9.eE]+)")[,2] |> as.numeric()
+  ) %>%
+  select(file, K, CV) %>%
+  arrange(K)
+
+```
+
+# Plot samples and ancestry percentage in space
+
+```{r}
+# Load CSV File
+csv <- read_csv("/home/g27n141/bioe-591-genomics/students/Helmstetter/hw_output/10/data/IDGS_BIOCLIM_Land_Soil_all_ed.csv", col_names = TRUE, show_col_types = FALSE
+)
+
+# Rename ID as sample
+csv <- csv %>%
+  rename(sample = ID)
+
+```
+
+Merge dfs for plotting
+
+```{r}
+q_df2 <- q_df %>%
+  left_join(csv %>% select(sample, Lat, Long), by = "sample")
+
+```
+
+Make df into an sf object for plotting in space.
+
+```{r}
+q_sf <- st_as_sf(q_df2, coords = c("Long", "Lat"), crs = 4326)
+
+```
+
+Plot as pie chart showing ancestry (I just did this for some marten data) :)
+
+```{r}
+ggplot() +
+  geom_scatterpie(
+    data = q_df2,
+    aes(x = Long, y = Lat),
+    cols = c("Cluster1", "Cluster2"),
+    pie_scale = 1.2,
+    color = "black"
+  ) +
+  coord_equal() +
+  theme_void() +
+  theme(legend.position = "none")
+
+
+```
+
+# Running a PCA
+
+Load .vcf data
+```{r}
+vcf <- read.vcfR(
+  file = "/home/g27n141/bioe-591-genomics/students/Helmstetter/hw_output/10/data/IDGS.recode.vcf",
+  verbose = TRUE
+)
+```
+
+
+Converts genotpyes in VCF and makes a DNbin object. A, C, G, T for each individual.
+```{r}
+
+dna <- vcfR2DNAbin(vcf, unphased_as_NA = F, consensus = T, extract.haps = F)
+species_genind <- DNAbin2genind(dna)
+species_genind
+
+
+```
+
+Deal with missing data and center genotypes (i.e., make laternative homozygotes equivalent, not translate to numierc values of 0 or 2 based on their allele count). Then run PCA on data.
+```{r}
+
+species_genind_scaled <- scaleGen(species_genind,NA.method="mean",scale=F)
+species_pca <- prcomp(species_genind_scaled, center=F,scale=F)
+
+
+```
+
+Run Screeplot. While PC1 explains most of the variation in our data, variation appears to be fairly spread out. There is no sharp decline after PC1 and PC2. 
+```{r}
+screeplot(species_pca)
+
+```
+Plotting individuals in PC1 and PC2 space. Seperate by species. As expected, southern Idaho ground squirrels have more genetic variation than the smaller, isolated Northern Idaho ground squirrel populations. 
+```{r}
+pc <- data.frame(species_pca$x[,1:3])
+pc$sample <- rownames(pc)
+
+# Get speies from csv for each sample
+pc <- pc %>%
+  left_join(csv %>% select(sample, Species), by = "sample")
+
+# Plot seperated by species
+ggplot(pc, aes(x = PC1, y = PC2, color = Species)) +
+  geom_point(size = 2) +
+  theme_bw()+
+  theme(panel.grid = element_blank())
+
+
+```
+# Running a Discriminant Analysis of Principal Components (DAPC)
+
+Assign samples distinct, nonoverlapping clusters based on similarity in in PC space
+```{r}
+grp <- find.clusters(species_genind, n.pca = 50, n.clust = 2)
+grp
+
+```
+
+
+
+Plot samples in PC1 and PC2 space seperating by defined clusters (above)
+```{r}
+
+pc$cluster <- grp$grp
+ggplot(pc, aes(x = PC1, y = PC2, color = cluster)) +
+  geom_point(size = 2) +
+  geom_text(aes(label = sample), vjust = -0.5, size = 3) 
+
+
+```
+
+DAPC takes these hard-coded assignments and determines which principal components contribute to them, as well as any uncertainty in ancestry. (It is thus designed to discriminate on the basis of user-input populations, and should be used in combination with 
+-means clustering or other approaches for detecting and / or designating structure.)
+
+
+```{r}
+# Keeps 50 principal components, Finds axes that maximize between-group differences for n.da = 2 groups
+# na.da = 2 means we are asking for two discriminant axes, but since k = 2 groups, only 1 meaingful axis exists.
+# We want to maximize variation between groups and minimize variation within groups
+# Gives probabilities of each individual belonging to each group
+
+dapc1 <- dapc(species_genind, pop = grp$grp, n.pca = 50, n.da = 2)
+dapc1
+
+```
+
+The important part of this output are the posterior probabilities of ancestry assignments. We will extract these and turn it into a tibble with sample name, cluster, and ancestry probability:
+Looks analgous to our admixture results.
+```{r}
+q <- as.data.frame(dapc1$posterior)
+  q$sample <- rownames(q)
+  q_long <- q |>
+    pivot_longer(
+      cols = -sample,
+      names_to = "cluster",
+      values_to = "ancestry"
+    )
+q_long
+
+```
+
+Plot ancestry estimates from DAPC
+```{r}
+
+ggplot(q_long, aes(x = sample, y = ancestry, fill = cluster)) +
+  geom_col(width = 1, color = "white") +
+  theme_bw() +
+  labs(x = "Individual", y = "Assignment probability") +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)
+  )
+
+
+```
+
+Compare results across differetn values of K
+Uses BIC to evaluate results (i.e., model fit vs model complexity). This is not running a bayesian analysis despite using BIC.
+```{r}
+
+# Identify clusters
+grp_auto <- find.clusters(
+  species_genind,
+  n.pca = 50,
+  choose.n.clust = FALSE, 
+  max.n.clust = 10,
+  stat = "BIC"
+)
+
+# Print BIC values
+grp_auto$Kstat
+
+
+```
+
+Plot BIC values for each K
+Notice the elbow at K = 2, while BIC gets better as K increases, the biggest drop (or delta) is between 1 and 2. K = 2 appears to have the most meaningful jump in population structure.
+```{r}
+# plot!
+plot(
+  1:length(grp_auto$Kstat),
+  grp_auto$Kstat,
+  type = "b",
+  xlab = "K",
+  ylab = "BIC"
+)
+
+```
