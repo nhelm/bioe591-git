@@ -1,0 +1,243 @@
+---
+title: "Helmstetter HW 12"
+author: "Nolan Helmstetter"
+format:
+  html:
+    embed-resources: true
+editor: visual
+---
+
+```{r}
+#| message: false
+#| warning: false
+
+library(pcadapt)
+library(vcfR)
+library(adegenet)
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(patchwork)
+library(viridis)
+
+```
+
+Load data. Read.pcadapt takes a VCF file and imports it so that package pcadapt can use it.
+
+```{r}
+#| message: false
+#| warning: false
+meta <- read_csv("~/bioe-591-genomics/course-materials/data/selection/metadata.csv")
+x <- read.pcadapt("~/bioe-591-genomics/course-materials/data/selection/salvelinus.vcf", type = "vcf")
+```
+
+Run a PCA on the data. Plot PCs on a screeplot.
+
+```{r}
+pca <- pcadapt(x, K = 20)
+plot(pca, option = "screeplot")
+```
+
+The first 4 PCs represent the background pattern of genetic variation expected under neutral processes (i.e., structure we'd expect to see just due to isolation by distance, genetic drift, etc.). Then we can test each SNP for how strongly it is associated with these axes, and identify outlier loci as those with PC loadings that are significantly larger than expected relative to the genome-wide distribution. These SNPs may reflect alleles under selection.
+
+```{r}
+pca_4 <- pcadapt(x, K = 4)
+
+```
+
+We then identify outliers using the pvalues vector of the padj object. Because we are simultaneously testing thousands of SNPs, we need to correct for multiple comparisons to reduce the rate of false positives (also known as the false discovery rate, or FDR). The p.adjust() function includes many approaches to this; we will implement a conservative approach known as a Bonferroni correction ($\frac{\alpha}{n}$), where $\alpha$ is the original significance level and $n$ is the number of comparisons). We can then subset the adjusted $p$-values into vectors that exceed or don’t exceed this threshold, and print their length to the console:
+
+```{r}
+alpha <- 0.05
+padj <- p.adjust(pca_4$pvalues, method = "bonferroni")
+outlier_idx <- which(padj < alpha)
+neutral_idx <- which(padj >= alpha)
+cat("Outlier loci:", length(outlier_idx), "\n")
+```
+
+Number of neutral loci
+
+```{r}
+cat("Neutral loci:", length(neutral_idx), "\n")
+```
+
+Plot distribution of loci
+
+```{r}
+plot(pca_4)
+```
+
+Explore relationship of these outliers to inferred patterns of variation across populations and proxies for climate such as latitude. Using adegenet.
+
+```{r}
+# Load data and subset it by the index of outliers created above. 
+
+vcf <- read.vcfR("~/bioe-591-genomics/course-materials/data/selection/salvelinus.vcf", verbose = FALSE)
+vcf_neutral <- vcf[neutral_idx, ]
+vcf_outlier <- vcf[outlier_idx, ]
+
+```
+
+These neutral and outlier SNP sets need to be converted to genind objects (with DNAbin objects as a necessary intermediate step):
+
+```{r}
+dna_neutral <- vcfR2DNAbin(vcf_neutral, unphased_as_NA = FALSE, consensus = TRUE, extract.haps = FALSE)
+gi_neutral <- DNAbin2genind(dna_neutral)
+dna_outlier <- vcfR2DNAbin(vcf_outlier, unphased_as_NA = FALSE, consensus = TRUE, extract.haps = FALSE)
+gi_outlier <- DNAbin2genind(dna_outlier)
+```
+
+Scale our genotypes by subtracting the average number of copies of each allele at a given locus across all individuals from each individual’s value (i.e., how many copies of that allele they have). For example, if an individual is TT at a locus (value = 2), and the average number of T alleles in the population is 0.5, the scaled value would be 2 − 0.5 = 1.5. I think.
+
+```{r}
+gi_neutral_scaled <- scaleGen(gi_neutral, NA.method = "mean", scale = FALSE)
+pca_neutral <- prcomp(gi_neutral_scaled, center = FALSE, scale. = FALSE)
+gi_outlier_scaled <- scaleGen(gi_outlier, NA.method = "mean", scale = FALSE)
+pca_outlier <- prcomp(gi_outlier_scaled, center = FALSE, scale. = FALSE)
+
+```
+
+Transform our PCA objects (of type double) into dataframes for plotting. We’ll do this by extracting the first two PC axes from each, making rownames into a column labeled sample, and joining these to our metadata object (meta) by aligning sample names. We’ll also create axes that span the range of PC values from both datasets, and extract the percentage of variation they explain.
+
+```{r}
+# turn lists into dataframes
+neutral_df <- data.frame(pca_neutral$x[, 1:2]) %>%
+  mutate(sample = rownames(.))
+outlier_df <- data.frame(pca_outlier$x[, 1:2]) %>%
+  mutate(sample = rownames(.))
+
+# join metadata
+neutral_df <- left_join(neutral_df, meta, by = c("sample" = "Sample.ID"))
+outlier_df <- left_join(outlier_df, meta, by = c("sample" = "Sample.ID"))
+
+# shared axis limits
+xlims <- range(c(outlier_df$PC1, neutral_df$PC1), na.rm = TRUE)
+ylims <- range(c(outlier_df$PC2, neutral_df$PC2), na.rm = TRUE)
+
+# percent variance explained
+neutral_var <- 100 * summary(pca_neutral)$importance[2, ]
+outlier_var <- 100 * summary(pca_outlier)$importance[2, ]
+```
+
+```{r}
+p1 <- ggplot(neutral_df, aes(x = PC1, y = PC2, color=Site.Latitude)) +
+  geom_point(size = 2, alpha = 0.8) +
+  scale_color_viridis() +
+  coord_cartesian(xlim = xlims, ylim = ylims) +
+  theme_classic() +
+  theme(legend.position = "bottom") +
+  labs(
+    title = "PCA: neutral loci",
+    x = paste0("PC1 (", round(neutral_var[1], 1), "%)"),
+    y = paste0("PC2 (", round(neutral_var[2], 1), "%)")
+  ) 
+
+p2 <- ggplot(outlier_df, aes(x = PC1, y = PC2, color=Site.Latitude)) +
+  geom_point(size = 2, alpha = 0.8) +
+  scale_color_viridis() +
+  coord_cartesian(xlim = xlims, ylim = ylims) +
+  theme_classic() +
+  theme(legend.position = "bottom") +
+  labs(
+    title = "PCA: outlier loci only",
+    x = paste0("PC1 (", round(outlier_var[1], 1), "%)"),
+    y = paste0("PC2 (", round(outlier_var[2], 1), "%)")
+  )
+
+p1 + p2
+```
+
+
+**Results and Discussion**
+
+The results suggest that the main genetic variation among individuals, when examining only neutral loci (left PCA plot), does not appear to be strongly structured by latitude. While there is latitudinal patterning along PC2, this axis explains only 4.9% of the variation. In contrast, PC1 explains a larger proportion of variation (21.4%) but does not show a clear association with latitude. In comparison, the outlier PCA (right PCA plot) explains a larger proportion of the genetic variation among individuals (78.7%), and the PC1 axis appears to be associated with latitude. That is, discrete clusters in PC space correspond to similar latitudes, suggesting that these loci may be under selection associated with environmental gradients correlated with latitude.
+
+```{r}
+#| warning: false
+x1 <- ggplot(outlier_df, aes(x = Site.Latitude, y = PC1)) +
+  geom_point() +
+  theme_classic() +
+  labs(x = "Latitude", y = "PC1: Outlier Loci")
+
+x2 <- ggplot(outlier_df, aes(x = Site.Latitude, y = PC2)) +
+  geom_point() +
+  theme_classic() +
+  labs(x = "Latitude", y = "PC2: Outlier Loci")
+
+x3 <- ggplot(neutral_df, aes(x = Site.Latitude, y = PC1)) +
+  geom_point() +
+  theme_classic() +
+  labs(x = "Latitude", y = "PC1: Neutral Loci")
+
+x4 <- ggplot(neutral_df, aes(x = Site.Latitude, y = PC2)) +
+  geom_point() +
+  theme_classic() +
+  labs(x = "Latitude", y = "PC2: Neutral Loci")
+
+(x1 | x2) / (x3 | x4)
+```
+
+**Results and Discussion**
+
+Plotting PC axes against latitude for both outlier and neutral loci tells a similar story. For outlier loci (top two graphs), there is a clear grouping at lower latitudes with high PC1 values, indicating that individuals at these latitudes are driving much of the variation observed in the data. Individuals at higher latitudes, in contrast, cluster at lower PC1 values. For neutral loci, PC values are more spread out across latitudes and do not show a strong or consistent relationship with latitude. However, there appears to be some weak structuring, with slightly higher PC1 values at lower latitudes.
+
+```{r}
+p3 <- ggplot(neutral_df, aes(x = PC1, y = PC2, color=Site.Longitude)) +
+  geom_point(size = 2, alpha = 0.8) +
+  scale_color_viridis() +
+  coord_cartesian(xlim = xlims, ylim = ylims) +
+  theme_classic() +
+  theme(legend.position = "bottom") +
+  labs(
+    title = "PCA: neutral loci",
+    x = paste0("PC1 (", round(neutral_var[1], 1), "%)"),
+    y = paste0("PC2 (", round(neutral_var[2], 1), "%)")
+  ) 
+
+p4 <- ggplot(outlier_df, aes(x = PC1, y = PC2, color=Site.Longitude)) +
+  geom_point(size = 2, alpha = 0.8) +
+  scale_color_viridis() +
+  coord_cartesian(xlim = xlims, ylim = ylims) +
+  theme_classic() +
+  theme(legend.position = "bottom") +
+  labs(
+    title = "PCA: outlier loci only",
+    x = paste0("PC1 (", round(outlier_var[1], 1), "%)"),
+    y = paste0("PC2 (", round(outlier_var[2], 1), "%)")
+  )
+
+p3 + p4
+```
+
+**Results and Discussion**
+
+When evaluating the relationship between genetic variation and longitude using PCAs, no clear pattern is observed for either neutral or outlier loci. The clusters observed in the outlier PCA occur at similar longitudes, indicating that longitude does not explain the observed genetic structure. This is consistent with expectations, as environmental gradients such as temperature and precipitation are typically more strongly associated with latitude than longitude.
+
+```{r}
+#| warning: false
+x5 <- ggplot(outlier_df, aes(x = Site.Longitude, y = PC1)) +
+  geom_point() +
+  theme_classic() +
+  labs(x = "Longitude", y = "PC1: Outlier Loci")
+
+x6 <- ggplot(outlier_df, aes(x = Site.Longitude, y = PC2)) +
+  geom_point() +
+  theme_classic() +
+  labs(x = "Longitude", y = "PC2: Outlier Loci")
+
+x7 <- ggplot(neutral_df, aes(x = Site.Longitude, y = PC1)) +
+  geom_point() +
+  theme_classic() +
+  labs(x = "Longitude", y = "PC1: Neutral Loci")
+
+x8 <- ggplot(neutral_df, aes(x = Site.Longitude, y = PC2)) +
+  geom_point() +
+  theme_classic() +
+  labs(x = "Longitude", y = "PC2: Neutral Loci")
+
+(x5 | x6) / (x7 | x8)
+```
+
+**Results and Discussion**
+
+Results from plotting PC axes against longitude show some clustering of high PC1 values at a specific longitude. However, this pattern likely reflects a single, geographically distinct population rather than a consistent longitudinal gradient in genetic variation. Unlike latitude, longitude does not show a clear relationship with PC values across individuals as all other PC values are low on either side longitudinally with that cluster. While this pattern may warrant further exploration of local environmental or habitat variables (me being hand wavy), the results do not provide strong evidence that longitude itself (or environmental gradients associated with longitude) structures genetic variation.
